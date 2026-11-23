@@ -6,6 +6,7 @@ const total = Object.values(topics).reduce((sum, topic) => sum + topic.count, 0)
 const target = Math.ceil(total * 0.8);
 const storageKey = 'iowa-permit-last-questions-v1';
 const letters = 'ABCD';
+const submissions = 'https://iowa-permit-submissions.dapper-disney-dad.chatgpt.site';
 const visuals = {
   stop: 'STOP',
   yield: 'YIELD',
@@ -17,6 +18,7 @@ const visuals = {
 let attempt = [];
 let answers = new Map();
 let position = 0;
+let submission;
 
 function shuffle(items) {
   const result = [...items];
@@ -55,6 +57,11 @@ function startAttempt(focus = false) {
     // In-page restarts can still use the previous selection.
   }
   answers = new Map();
+  submission = {
+    id: crypto.randomUUID(),
+    ids: attempt.map(question => question.id),
+    started: null
+  };
   showQuestion(0, focus);
 }
 
@@ -86,6 +93,7 @@ function showQuestion(index, focus = true) {
   options.forEach(button => {
     button.onclick = () => {
       answers.set(question.id, question.choices[Number(button.dataset.choice)]);
+      recordStart(submission);
       options.forEach(option => option.setAttribute('aria-pressed', String(option === button)));
       updateProgress();
     };
@@ -141,7 +149,43 @@ function finishAttempt() {
   if (remaining && !window.confirm(
     `You have ${remaining} unanswered ${remaining === 1 ? 'question' : 'questions'}. Finish and count them as incorrect?`
   )) return;
+  recordFinish(submission, attempt.map(question => answers.get(question.id) ?? null));
   showResults();
+}
+
+async function postAttempt(path, payload) {
+  try {
+    const result = await fetch(submissions + '/attempts/' + path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      keepalive: true,
+      signal: AbortSignal.timeout(10000)
+    });
+    return result.ok;
+  } catch {
+    return false;
+  }
+}
+
+function recordStart(current) {
+  if (!current.started) {
+    const {id, ids} = current;
+    current.started = postAttempt('start', {id, ids}).then(saved => {
+      if (!saved) current.started = null;
+      return saved;
+    });
+  }
+  return current.started;
+}
+
+async function recordFinish(current, choices) {
+  const saved = await recordStart(current) || await recordStart(current);
+  if (!saved) return;
+  const payload = {id: current.id, choices};
+  if (!await postAttempt('finish', payload)) await postAttempt('finish', payload);
 }
 
 function showResults() {
